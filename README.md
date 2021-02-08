@@ -68,8 +68,8 @@ We deploy our solution using the provided AWS CloudFormation template in the Org
 An example walkthrough of steps to deploy security group changes into your accounts :
 
 * Create codecommit repository using the following command : 
-```aws codecommit create-repository --repository-name NetworkingResourcesRepository
-    --repository-description "Networking Resouces Repository"
+```
+aws codecommit create-repository --repository-name NetworkingResourcesRepository --repository-description "Networking Resouces Repository"
 ```
     
 * Create a clone of the CodeCommit repository to your local machine. For HTTPS using *git-remote-codecommit* (https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-git-remote-codecommit.html), assuming the default profile and AWS Region configured in the AWS CLI, use the following command to clone the repository :
