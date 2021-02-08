@@ -1,0 +1,462 @@
+###################################################################################
+#   Description: This cloudformation template deploys cloudformation templates across multiple environments
+#                across multiple accounts and regions by using Cloudformation Stacksets
+#
+#   Date : 01/29/2021
+#   Author: Abhishek Naik (abhisna@amazon.com)
+#
+#   Pre-requisites: 1. Access to AWS Organizations management account.
+#                   2. Access to provision S3 buckets and Networking resources such as Security Groups, Route Tables, Transit Gateways
+#                   3. IAM role deployed for cloudformation Stackset access
+#
+###################################################################################
+#   PLEASE READ THE PRE-REQUISITES CAREFULLY BEFORE DEPLOYING THE SOLUTION
+###################################################################################
+
+Parameters:
+###################### PARAMETERS ##########################
+  OrganizationID:
+    Description: Please specify the AWS Organization ID to deploy this solution. 
+    Type: String
+    Default: 'o-h7bqwylff6'
+
+  InfrastructureRepository:
+    Type: String
+    Description: Codecommit repository name for storing the network resource deployment templates
+    Default: 'network-resources-repo'
+
+  LinkedRole:
+    Type: String
+    Description: Role That will have access to launch Cloudformation stacks across accounts
+    Default: AWSCloudFormationStackSetExecutionRole
+
+
+###################################
+#####  RESOURCES
+###################################
+Resources:
+
+##  S3 Bucket for holding the cloudformation templates
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join ['-' , [ 'networking-resources-deploy' , !Ref "AWS::AccountId"]]
+      VersioningConfiguration:
+        Status: Enabled
+
+  S3BucketOrgPolicy: # S3 bucket policy allows remote account's access to cloudformation templates.
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref 'S3Bucket'
+      PolicyDocument:
+        Id: defaultOrgAccessPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: bucketPermissionsCheck
+          Effect: Allow
+          Action:
+          - s3:GetBucketAcl
+          Principal: "*"
+          Resource: !GetAtt S3Bucket.Arn
+          Condition:
+            StringEquals:
+              aws:PrincipalOrgID: !Ref OrganizationID
+        - Sid: AllowObjectReadWrite
+          Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          Principal: "*"
+          Resource: !Join ['/', [ !GetAtt S3Bucket.Arn, '*']]
+          Condition:
+            StringEquals:
+              aws:PrincipalOrgID: !Ref OrganizationID
+
+
+  S3AutomationsExecutionRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      RoleName: S3AutomationsExecutionRole
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ssm.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+  
+  S3utomationExecutionRolePolicies: 
+    Type: "AWS::IAM::Policy"
+    Properties: 
+      PolicyName: "S3AutomationsExecutionRolePolicy"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Action: 
+              - "s3:PutBucketPublicAccessBlock"
+              - "s3:PutEncryptionConfiguration"
+              - "s3:PutBucketLogging"
+            Resource: "*"
+      Roles: 
+        - 
+          Ref: "S3AutomationsExecutionRole"
+
+
+#########################################################################
+###
+###   Pipeline to automate deployment of networking resources
+###
+##########################################################################
+
+  NetworkResourceDeploymentPipeline: 
+    Type: AWS::CodePipeline::Pipeline 
+    Properties:
+      Name: !Sub "${S3Bucket}-Pipeline"
+      RoleArn: !GetAtt CodePipeLineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceCode
+              Configuration:
+                PollForSourceChanges: false
+                BranchName: main
+                RepositoryName: !Ref InfrastructureRepository
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1' 
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Sub "${S3Bucket}-Lint"
+              RunOrder: 1
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: DeployableArtifact
+       
+        - Name: Deploy
+          Actions:
+            - Name: DeployStackSet
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1' 
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Sub "${S3Bucket}-Deploy"
+              RunOrder: 1
+              InputArtifacts:
+                - Name: SourceCode
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+
+
+  BuildProjLint:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${S3Bucket}-Lint"
+      Description: CodeBuild for Common Infrastructure
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/python:3.6.5
+        PrivilegedMode: true
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - pip install cfn-lint
+            build:
+              commands:
+                - echo "Validating CFn syntax..."
+                - ls -l 
+                - cfn-lint -t ./*.yaml
+          artifacts:
+            files:
+              - '**/*'
+            discard-paths: yes
+      TimeoutInMinutes: 10
+
+
+  DeployBuildProj:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${S3Bucket}-Deploy"
+      Description: CodeBuild to Deploy StackSet
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/python:3.6.5
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: S3BUCKET
+            Value: !Sub "${S3Bucket}"   
+          - Name: STACK_NAME
+            Value: 'aws-security-group-deploy'
+          - Name: TEMPLATE
+            Value: 'SecurityGroups/ecs-security-group.yaml'
+          - Name: PARAMETERS
+            Value: 'SecurityGroups/config.json'
+          - Name: LINKED_ROLE
+            Value: !Ref LinkedRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo "Python has some SSL issues in this version so we force an upgrade which doesn't fix everything; don't be alarmed by the warnings."
+                - sudo -i pip install --upgrade requests   
+                - apt update
+                - apt install jq     
+            build:
+              commands:
+                - ACCID=$(aws organizations list-accounts --query 'Accounts[*].Id')
+                - echo "ACCID passed : $ACCID"
+                - echo "S3 Upload Beginning"                
+                - aws s3 sync . s3://${S3BUCKET}/ --delete --exclude "*" --include "*.json" --include "*.yaml"
+                - |
+                  VERIFYSTACKSET=$(aws cloudformation describe-stack-set --stack-set-name ${STACK_NAME}-StackSet);
+                  VERIFY=$?; 
+                  if [ ${VERIFY} -eq 255 ]; then 
+                    echo "Creating Stack-Set $STACK_NAME-StackSet..."
+                    aws cloudformation create-stack-set --stack-set-name ${STACK_NAME}-StackSet --execution-role-name AWSCloudFormationStackSetExecutionRole --template-url "https://s3.amazonaws.com/${S3BUCKET}/${TEMPLATE}" --parameters "https://s3.amazonaws.com/${S3BUCKET}/${PARAMETERS}" --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
+                    echo "Creating Stack Instances in all accounts in $ORGID ..."
+                    OPERID_CREATSTACKSET=$(aws cloudformation create-stack-instances --stack-set-name ${STACK_NAME}-StackSet --regions us-east-1 --accounts ${ACCID} --operation-preferences FailureToleranceCount=0,MaxConcurrentCount=5 | jq '.OperationId' | tr -d '"')
+                    STATUS_CREATSTACKSET=""
+                    until [ "${STATUS_CREATSTACKSET}" = "SUCCEEDED" ]; do 
+                      STATUS_CREATSTACKSET=$(aws cloudformation describe-stack-set-operation --stack-set-name ${STACK_NAME}-StackSet --operation-id ${OPERID_CREATSTACKSET} | jq '.StackSetOperation.Status' | tr -d '"')
+                      echo "Creating Stack-Set Instances from Stack-Set ${STACK_NAME}-StackSet. Current status: $STATUS_CREATSTACKSET"
+                      sleep 10
+                    done
+                    exit 0
+                  else
+                    echo "StackSet ${STACK_NAME}-StackSet already exists. Performing update... "
+                    OPERID_UPDATESTACKSET=$(aws cloudformation update-stack-set --stack-set-name ${STACK_NAME}-StackSet --execution-role-name AWSCloudFormationStackSetExecutionRole --template-url "https://s3.amazonaws.com/${S3BUCKET}/${TEMPLATE}" --parameters "https://s3.amazonaws.com/${S3BUCKET}/${PARAMETERS}" --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND | jq '.OperationId' | tr -d '"')
+                    STATUS_UPDATESTACKSET=""
+                    until [ "${STATUS_UPDATESTACKSET}" = "SUCCEEDED" ]; do 
+                      STATUS_UPDATESTACKSET=$(aws cloudformation describe-stack-set-operation --stack-set-name ${STACK_NAME}-StackSet --operation-id ${OPERID_UPDATESTACKSET} | jq '.StackSetOperation.Status' | tr -d '"')
+                      echo "Updating Stack-Set  ${STACK_NAME}-StackSet. Current status: ${STATUS_UPDATESTACKSET}"
+                      sleep 10
+                    done
+                  fi                 
+                - exit 0
+          artifacts:
+            files:
+              - 'templates/*'
+            discard-paths: yes
+      TimeoutInMinutes: 10
+
+
+  CodePipeLineServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+       -
+          PolicyName: "CodePipelinePolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "s3:DeleteObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:ListBucket"
+                  - "s3:PutObject"
+                  - "s3:GetBucketPolicy"
+                Resource:
+                  - !Sub arn:aws:s3:::${S3Bucket}
+                  - !Sub arn:aws:s3:::${S3Bucket}/*
+              -
+                Effect: "Allow"
+                Action:
+                  - "codecommit:ListBranches"
+                  - "codecommit:ListRepositories"
+                  - "codecommit:BatchGetRepositories"
+                  - "codecommit:Get*"
+                  - "codecommit:GitPull"
+                  - "codecommit:UploadArchive"
+                  - "codecommit:GetBranch" 
+                Resource:
+                  - Fn::Sub:
+                        - arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${RepoName}
+                        - RepoName: !Ref InfrastructureRepository               
+              -
+                Effect: "Allow"
+                Action:
+                  - "cloudformation:CreateChangeSet"
+                  - "cloudformation:CreateStack"
+                  - "cloudformation:CreateUploadBucket"
+                  - "cloudformation:DeleteStack"
+                  - "cloudformation:Describe*"
+                  - "cloudformation:List*"
+                  - "cloudformation:UpdateStack"
+                  - "cloudformation:ValidateTemplate"
+                  - "cloudformation:ExecuteChangeSet"
+                Resource:
+                  - "*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuilds"
+                Resource:
+                  - "*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "iam:PassRole"
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3Bucket}
+                  - !Sub arn:aws:s3:::${S3Bucket}/*                                    
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - "cloudformation:*"
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                  - ecr:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+
+  CloudWatchEventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        -
+          PolicyName: cwe-network-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${NetworkResourceDeploymentPipeline}"
+
+  CloudWatchEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - 'CodeCommit Repository State Change'
+        resources:
+          - Fn::Sub:
+              - arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${RepoName}
+              - RepoName: !Ref InfrastructureRepository             
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Targets:
+        -
+          Arn: !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${NetworkResourceDeploymentPipeline}"
+          RoleArn: !GetAtt CloudWatchEventsRole.Arn
+          Id: codepipeline-Pipeline
+
+
+###################################
+#####  Outputs
+###################################

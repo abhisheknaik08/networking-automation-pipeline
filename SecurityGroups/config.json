@@ -1,0 +1,24 @@
+[
+    {
+      "ParameterKey": "EnvironmentName",
+      "ParameterValue": "dev",
+      "UsePreviousValue": true
+    },
+    {
+        "ParameterKey": "VPC",
+        "ParameterValue": "vpc-66d26e1c",
+        "UsePreviousValue": false
+    },
+    {
+        "ParameterKey": "CIDR",
+        "ParameterValue": "0.0.0.0/0",
+        "UsePreviousValue": false
+    }
+]
+
+// {
+//     "account_list": "651993575865,336394507551,962712925192,783183083041",
+//     "EnvironmentName": "dev",
+//     "VPC": "vpc-66d26e1c",
+//     "CIDR": "0.0.0.0/0"
+// }
