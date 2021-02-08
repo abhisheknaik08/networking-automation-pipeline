@@ -20,10 +20,3 @@
         "UsePreviousValue": false
     }
 ]
-
-// {
-//     "account_list": "651993575865,336394507551,962712925192,783183083041",
-//     "EnvironmentName": "dev",
-//     "VPC": "vpc-66d26e1c",
-//     "CIDR": "0.0.0.0/0"
-// }
