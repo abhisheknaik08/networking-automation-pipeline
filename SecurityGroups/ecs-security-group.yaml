@@ -12,6 +12,11 @@ Parameters:
     Description: Provide the CIDR Range for ingress rules for security group 
     Type: String
     Default: 10.0.0.0/8
+  
+  Port:
+    Description: Provide the Port which you want to open for ingress rule
+    Type: String
+    Default: 443
 
   VPC:
     Type: AWS::EC2::VPC::Id
@@ -47,6 +52,8 @@ Resources:
         # Allow access from this CIDR range to application
         - CidrIp: !Ref CIDR
           IpProtocol: '-1'
+          FromPort: !Ref Port
+          ToPort: !Ref Port
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-LoadBalancers
