@@ -226,6 +226,8 @@ Resources:
             Value: 'SecurityGroups/config.json'
           - Name: LINKED_ROLE
             Value: !Ref LinkedRole
+          - Name: ACCOUNTLIST
+            Value: 'SourceCode::SecurityGroups/accounts.txt'
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -239,7 +241,7 @@ Resources:
                 - apt install jq     
             build:
               commands:
-                - ACCID=$(aws organizations list-accounts --query 'Accounts[*].Id')
+                - ACCID="651993575865,336394507551,962712925192,783183083041"
                 - echo "ACCID passed : $ACCID"
                 - echo "S3 Upload Beginning"                
                 - aws s3 sync . s3://${S3BUCKET}/ --delete --exclude "*" --include "*.json" --include "*.yaml"
