@@ -228,6 +228,7 @@ Resources:
             Value: !Ref LinkedRole
           - Name: ACCOUNTLIST
             Value: 'SourceCode::SecurityGroups/accounts.txt'
+
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -252,7 +253,7 @@ Resources:
                     echo "Creating Stack-Set $STACK_NAME-StackSet..."
                     aws cloudformation create-stack-set --stack-set-name ${STACK_NAME}-StackSet --execution-role-name AWSCloudFormationStackSetExecutionRole --template-url "https://s3.amazonaws.com/${S3BUCKET}/${TEMPLATE}" --parameters "https://s3.amazonaws.com/${S3BUCKET}/${PARAMETERS}" --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
                     echo "Creating Stack Instances in all accounts in $ORGID ..."
-                    OPERID_CREATSTACKSET=$(aws cloudformation create-stack-instances --stack-set-name ${STACK_NAME}-StackSet --regions us-east-1 --accounts ${ACCID} --operation-preferences FailureToleranceCount=0,MaxConcurrentCount=5 | jq '.OperationId' | tr -d '"')
+                    OPERID_CREATSTACKSET=$(aws cloudformation create-stack-instances --stack-set-name ${STACK_NAME}-StackSet --regions us-east-1 --accounts ${ACCOUNTS} --operation-preferences FailureToleranceCount=0,MaxConcurrentCount=5 | jq '.OperationId' | tr -d '"')
                     STATUS_CREATSTACKSET=""
                     until [ "${STATUS_CREATSTACKSET}" = "SUCCEEDED" ]; do 
                       STATUS_CREATSTACKSET=$(aws cloudformation describe-stack-set-operation --stack-set-name ${STACK_NAME}-StackSet --operation-id ${OPERID_CREATSTACKSET} | jq '.StackSetOperation.Status' | tr -d '"')
