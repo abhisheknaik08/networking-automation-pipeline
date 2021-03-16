@@ -15,6 +15,11 @@
         "UsePreviousValue": false
     },
     {
+        "ParameterKey": "Region",
+        "ParameterValue": "us-west-2",
+        "UsePreviousValue": false
+    },
+    {
         "ParameterKey": "Port",
         "ParameterValue": "80",
         "UsePreviousValue": false
